@@ -1,14 +1,13 @@
 defmodule Implementation do
   def chord(numNodes,numRequests,failNodes) do
-    # m = get_next_pow(numNodes,0)
     m =  :math.log(numNodes)/:math.log(2) |> :math.ceil |> round #calculate size of finger table according to number of total nodes
-    list1 = 1..Kernel.trunc(:math.pow(2,m)) |> Enum.shuffle()
-    list1 = Enum.slice(list1,1..numNodes) |> Enum.sort
+    chord_ring = 1..Kernel.trunc(:math.pow(2,m)) |> Enum.shuffle()
+    chord_ring = Enum.slice(chord_ring,1..numNodes) |> Enum.sort
     node_set = Map.new
-    node_set = NodeCreator.create_nodes(node_set,list1,numNodes-1,m) #creates all the nodes with their finger table
+    node_set = NodeCreator.node_join(node_set,chord_ring,numNodes-1,m) #creates all the nodes with their finger table
     IO.puts " "
     IO.puts "Calculating number of hops"
-    ans = spawnRequests(0,numNodes, list1, numRequests, node_set, list1, m,0) #starts the lookup function with number of requests
+    ans = spawnRequests(0,numNodes, chord_ring, numRequests, node_set, chord_ring, m,0) #starts the lookup function with number of requests
     if ans != 0 do
       val = ans/(numRequests * (numNodes - failNodes)) #calculates the average number of hops per request
       IO.puts " "
@@ -20,35 +19,40 @@ defmodule Implementation do
 
   def failureModel(numNodes,numRequests,failNodes) do
     remainingNodes = numNodes - failNodes #the failed nodes are randomly removed
-    chord(remainingNodes,numRequests,failNodes)
+    m =  :math.log(remainingNodes)/:math.log(2) |> :math.ceil |> round #calculate size of finger table according to number of total nodes
+    failureList = 1..Kernel.trunc(:math.pow(2,m)) |> Enum.shuffle()
+    failureList = Enum.slice(failureList,1..remainingNodes) |> Enum.sort #this list contains the randomly failed nodes
+    if Enum.any?(failureList) do
+      chord(remainingNodes,numRequests,failNodes)
+    end
   end
 
-  def spawnRequests(remainingNodes , numNodes, list1, numRequests, node_set, list1, m, hop_count) do
+  def spawnRequests(remainingNodes , numNodes, chord_ring, numRequests, node_set, chord_ring, m, hop_count) do
     if numNodes - remainingNodes > 0 do #calls the request funtion until all the nodes are given the supplied number of requests
-      ans = spawnActors(numRequests,node_set,list1,m,numNodes,0,0,Enum.at(list1,remainingNodes), 0, 0)
-      spawnRequests(remainingNodes + 1, numNodes, list1, numRequests, node_set, list1, m,ans + hop_count)
+      ans = stabilize(numRequests,node_set,chord_ring,m,numNodes,0,0,Enum.at(chord_ring,remainingNodes), 0, 0)
+      spawnRequests(remainingNodes + 1, numNodes, chord_ring, numRequests, node_set, chord_ring, m,ans + hop_count)
     else
       hop_count
     end
   end
 
-  def spawnActors(numRequests,node_set,list1,m,numNodes,num,temp,next, hop, hop_count) do
+  def stabilize(numRequests,node_set,chord_ring,m,numNodes,num,temp,next, hop, hop_count) do
     if numRequests === 0 do #called for each request to the same nodes but with different random lookup
       hop_count
     else
       randVal = :rand.uniform(Kernel.trunc(:math.pow(2,m)))
-      ans = traverse_nodes(node_set,list1,m,numNodes,randVal,0,next,0) #this function is  called to start the lookup, with the starting node & the lookup node
+      ans = lookup_nodes(node_set,chord_ring,m,numNodes,randVal,0,next,0) #this function is  called to start the lookup, with the starting node & the lookup node
       if(ans != nil) do
-        spawnActors((numRequests - 1), node_set,list1,m,numNodes,num,temp,next, hop, ans + hop_count)
+        stabilize((numRequests - 1), node_set,chord_ring,m,numNodes,num,temp,next, hop, ans + hop_count)
       else
-        spawnActors((numRequests - 1), node_set,list1,m,numNodes,num,temp,next, hop, hop_count)
+        stabilize((numRequests - 1), node_set,chord_ring,m,numNodes,num,temp,next, hop, hop_count)
       end
     end
   end
 
-  def traverse_nodes(node_set,list1,m,numNodes,num,temp,next, hop) do
+  def lookup_nodes(node_set,chord_ring,m,numNodes,num,temp,next, hop) do
     IO.write "."
-    if next == Enum.at(list1,numNodes-1) || next == num || (Enum.at(list1,numNodes-1) == Kernel.trunc(:math.pow(2,m)) && next == Enum.at(list1,numNodes-2)) do
+    if next == Enum.at(chord_ring,numNodes-1) || next == num || (Enum.at(chord_ring,numNodes-1) == Kernel.trunc(:math.pow(2,m)) && next == Enum.at(chord_ring,numNodes-2)) do
       hop
     else
       if(temp != 0) do
@@ -61,15 +65,15 @@ defmodule Implementation do
           else
             if(temp < numNodes && max !=nil) do
               if(max < num) do
-                traverse_nodes(node_set,list1,m,numNodes,num,temp+1,max,hop+1)
+                lookup_nodes(node_set,chord_ring,m,numNodes,num,temp+1,max,hop+1)
               else
-                traverse_nodes(node_set,list1,m,numNodes,num,temp+1,next,hop+1)
+                lookup_nodes(node_set,chord_ring,m,numNodes,num,temp+1,next,hop+1)
               end
             end
           end
         end
       else
-        if(Map.fetch(node_set, Enum.at(list1,next)) == :error) do
+        if(Map.fetch(node_set, Enum.at(chord_ring,next)) == :error) do
           node1 = Map.fetch!(node_set, next)
           if(node1 != nil) do
             next = traverse_table(node1,num, next)
@@ -77,19 +81,19 @@ defmodule Implementation do
               hop
             else
               if(temp < numNodes) do
-                traverse_nodes(node_set,list1,m,numNodes,num,temp+1,next,hop+1)
+                lookup_nodes(node_set,chord_ring,m,numNodes,num,temp+1,next,hop+1)
               end
             end
           end
         else
-          {:ok, node1} = Map.fetch(node_set, Enum.at(list1,next))
+          {:ok, node1} = Map.fetch(node_set, Enum.at(chord_ring,next))
           if(node1 != nil) do
             next = traverse_table(node1,num, next)
             if(next == -1) do
               hop
             else
               if(temp < numNodes) do
-                traverse_nodes(node_set,list1,m,numNodes,num,temp+1,next,hop+1)
+                lookup_nodes(node_set,chord_ring,m,numNodes,num,temp+1,next,hop+1)
               end
             end
           end
@@ -117,24 +121,16 @@ defmodule Implementation do
     {:ok, index}
   end
 
-  def get_next_pow(n,i) do
-    k = :math.pow(2,i)
-    if(k < n) do
-      get_next_pow(n, i + 1)
-    else
-      i
-    end
-  end
 end
 
   defmodule NodeCreator do
-    def create_nodes(node_set,nodelist,n,m) do
+    def node_join(node_set,nodelist,n,m) do
       if(n>-1) do
         pid2 = self()
         {:ok, pid} = GenServer.start_link(NodeCreator, [:hello], name: String.to_atom("#{n}"))
         GenServer.cast(pid, {:push, [pid2,node_set,nodelist,n,m]}) #creates a new proess for each of the nodes created
         receive do
-          {:getNodeSet,node_set} ->  create_nodes(node_set,nodelist,n-1,m)
+          {:getNodeSet,node_set} ->  node_join(node_set,nodelist,n-1,m)
         end
       else
         node_set
